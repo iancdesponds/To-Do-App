@@ -4,11 +4,14 @@ FROM python:3.11-slim
 # Definir o diretório de trabalho
 WORKDIR /app
 
-# Copiar os arquivos do projeto para o contêiner
-COPY . /app
+# Copiar apenas o arquivo de dependências primeiro
+COPY requirements.txt .
 
-# Instalar as dependências do projeto
+# Instalar as dependências
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Copiar o restante dos arquivos do projeto para o contêiner
+COPY . /app
 
 # Expor a porta que o FastAPI irá rodar
 EXPOSE 8000
