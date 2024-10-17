@@ -53,8 +53,8 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token") # URL para obter o token 
 class Task(BaseModel): # Modelo de tarefa
     title: str
     description: str
-    status: str = "pending"
-    id: Optional[str] = None  # O `id` deve ser opcional
+    status: str = "pendente" # O status padrão é "pendente"
+    id: Optional[str] = None
 
     class Config: # Configuração para converter o objeto Pydantic para dicionário
         orm_mode = True
@@ -141,7 +141,14 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     access_token = create_access_token(data={"sub": user["username"]}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
 
+# Rota para fazer logout
+@app.post("/logout")
+async def logout():
+    return {"message": "Logout successful"}
+
 # Rotas de tarefas, protegidas com autenticação JWT
+
+# Rota para listar todas as tarefas
 @app.get("/tasks/", response_model=List[Task])
 async def get_tasks(current_user: dict = Depends(get_current_user)):
     tasks = await task_collection.find().to_list(100)
@@ -165,18 +172,26 @@ async def create_task(task: Task, current_user: dict = Depends(get_current_user)
     
     return created_task
 
-# Rota para atualizar o status de uma tarefa
+# Rota para atualizar o status de uma tarefa - troca o status de "pendente" para "concluída" e vice-versa
 @app.put("/tasks/{task_id}")
-async def update_task_status(task_id: str, status: str, current_user: dict = Depends(get_current_user)):
+async def update_task_status(task_id: str, current_user: dict = Depends(get_current_user)):
     if not ObjectId.is_valid(task_id):
         raise HTTPException(status_code=400, detail="Invalid task ID format")
+
+    task = await task_collection.find_one({"_id": ObjectId(task_id)})
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Alternar o status da tarefa
+    new_status = "completa" if task["status"] == "pendente" else "pendente"
+
+    # Atualizar o status da tarefa no banco de dados
+    updated_task = await task_collection.update_one({"_id": ObjectId(task_id)}, {"$set": {"status": new_status}})
     
-    updated_task = await task_collection.update_one({"_id": ObjectId(task_id)}, {"$set": {"status": status}})
-    
-    if updated_task.matched_count == 0:
+    if updated_task.modified_count == 0:
         raise HTTPException(status_code=404, detail="Task not found")
     
-    return {"message": "Task status updated successfully"}
+    return {"message": "Task status updated successfully", "new_status": new_status}
 
 # Rota para deletar uma tarefa
 @app.delete("/tasks/{task_id}")
