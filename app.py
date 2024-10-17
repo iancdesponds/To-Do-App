@@ -14,6 +14,7 @@ import pytz
 import bleach
 from dotenv import load_dotenv
 import os
+import json  # Necessário para serializar tarefas no Redis
 
 # Carregar variáveis de ambiente do arquivo .env
 load_dotenv()
@@ -126,14 +127,18 @@ async def get_current_user(token: str = Depends(oauth2_scheme)): # Função para
 
 # Cacheando uma tarefa no Redis
 async def cache_task(task_id, task_data):
-    redis_client.set(task_id, task_data)
+    redis_client.set(task_id, json.dumps(task_data))  # Serializando os dados da tarefa
 
 # Recuperando uma tarefa do Redis
 async def get_cached_task(task_id):
     task_data = redis_client.get(task_id)
     if task_data:
-        return task_data
+        return json.loads(task_data)  # Desserializando os dados da tarefa
     return None
+
+# Removendo uma tarefa do cache
+async def remove_task_from_cache(task_id):
+    redis_client.delete(task_id)
 
 # Rotas de autenticação e criação de usuários
 
@@ -169,9 +174,17 @@ async def logout():
 # Rota para listar todas as tarefas
 @app.get("/tasks/", response_model=List[Task])
 async def get_tasks(current_user: dict = Depends(get_current_user)):
+    cached_tasks = redis_client.get("all_tasks")
+    if cached_tasks:
+        return json.loads(cached_tasks)  # Retorna as tarefas cacheadas
+
     tasks = await task_collection.find().to_list(100)
     for task in tasks:
         task["id"] = str(task["_id"])
+
+    # Cachear a lista de tarefas no Redis
+    redis_client.set("all_tasks", json.dumps(tasks))
+    
     return tasks
 
 # Rota para criar uma nova tarefa
@@ -193,6 +206,12 @@ async def create_task(task: Task, current_user: dict = Depends(get_current_user)
     new_task = await task_collection.insert_one(task_dict)
     created_task = await task_collection.find_one({"_id": new_task.inserted_id})
     
+    # Cachear a tarefa individual
+    await cache_task(str(new_task.inserted_id), created_task)
+
+    # Remover o cache da lista de todas as tarefas, pois uma nova tarefa foi adicionada
+    redis_client.delete("all_tasks")
+    
     return created_task
 
 # Rota para atualizar o status de uma tarefa - troca o status de "pendente" para "concluída" e vice-versa
@@ -213,6 +232,13 @@ async def update_task_status(task_id: str, current_user: dict = Depends(get_curr
     
     if updated_task.modified_count == 0:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    # Atualizar o cache da tarefa individual
+    task["status"] = new_status
+    await cache_task(task_id, task)
+    
+    # Remover o cache da lista de todas as tarefas, pois uma tarefa foi atualizada
+    redis_client.delete("all_tasks")
     
     return {"message": "Task status updated successfully", "new_status": new_status}
 
@@ -227,4 +253,10 @@ async def delete_task(task_id: str, current_user: dict = Depends(get_current_use
     if deleted_task.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Task not found")
     
+    # Remover a tarefa do cache individual
+    await remove_task_from_cache(task_id)
+    
+    # Remover o cache da lista de todas as tarefas
+    redis_client.delete("all_tasks")
+
     return {"message": "Task deleted successfully"}
