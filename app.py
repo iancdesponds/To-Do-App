@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, constr
 from typing import List
 from fastapi.middleware.cors import CORSMiddleware
 import motor.motor_asyncio
@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 from bson import ObjectId
 import pytz
+import bleach
 from dotenv import load_dotenv
 import os
 
@@ -44,15 +45,19 @@ redis_client = Redis(host="redis-to-do", port=6379, db=0)
 # Configurações de segurança para senha e JWT
 SECRET_KEY = os.getenv("SECRET_KEY") # Chave secreta para assinar o token JWT
 ALGORITHM = "HS256" # Algoritmo de criptografia para o token JWT
-ACCESS_TOKEN_EXPIRE_MINUTES = 30 # Tempo de expiração do token JWT
+ACCESS_TOKEN_EXPIRE_MINUTES = 600 # Tempo de expiração do token JWT
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto") # Contexto de criptografia para a senha
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token") # URL para obter o token JWT
 
+# Função de sanitização
+def sanitize_input(input_string: str) -> str:
+    return bleach.clean(input_string)
+
 # Modelos de dados
 class Task(BaseModel): # Modelo de tarefa
-    title: str
-    description: str
+    title: str = Field(min_length=1, max_length=100) # Título deve ter de 1 a 100 caracteres
+    description: Optional[str] = None
     status: str = "pendente" # O status padrão é "pendente"
     id: Optional[str] = None
 
@@ -117,6 +122,19 @@ async def get_current_user(token: str = Depends(oauth2_scheme)): # Função para
         raise credentials_exception
     return user
 
+# Funções auxiliares para cache
+
+# Cacheando uma tarefa no Redis
+async def cache_task(task_id, task_data):
+    redis_client.set(task_id, task_data)
+
+# Recuperando uma tarefa do Redis
+async def get_cached_task(task_id):
+    task_data = redis_client.get(task_id)
+    if task_data:
+        return task_data
+    return None
+
 # Rotas de autenticação e criação de usuários
 
 # Rota para cadastrar um novo usuário
@@ -125,14 +143,14 @@ async def register(user: User):
     if await get_user(user.username):
         raise HTTPException(status_code=400, detail="Username already registered")
     hashed_password = get_password_hash(user.password)
-    new_user = {"username": user.username, "password": hashed_password}
+    new_user = {"username": sanitize_input(user.username), "password": hashed_password}
     await user_collection.insert_one(new_user)
     return {"message": "User created successfully"}
 
 # Rota para fazer login e gerar o token JWT
 @app.post("/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
-    user = await authenticate_user(form_data.username, form_data.password)
+    user = await authenticate_user(sanitize_input(form_data.username), form_data.password)
     if not user:
         raise HTTPException(
             status_code=401, detail="Incorrect username or password", headers={"WWW-Authenticate": "Bearer"}
@@ -161,6 +179,11 @@ async def get_tasks(current_user: dict = Depends(get_current_user)):
 async def create_task(task: Task, current_user: dict = Depends(get_current_user)):
     if not task.title:
         raise HTTPException(status_code=400, detail="Title cannot be empty")
+    
+    # Sanitiza as entradas de título e descrição
+    task.title = sanitize_input(task.title)
+    if task.description:
+        task.description = sanitize_input(task.description)
     
     task_dict = task.model_dump() # Converter o objeto Pydantic para dicionário
     
@@ -205,4 +228,3 @@ async def delete_task(task_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Task not found")
     
     return {"message": "Task deleted successfully"}
-
