@@ -2,6 +2,8 @@
 
 Este projeto é uma API para gerenciamento de tarefas (**To-Do List**) desenvolvida em **Python** com o framework **FastAPI**. A API oferece endpoints para criar, listar, atualizar e excluir tarefas, além de suporte à autenticação com **JWT**. O projeto também utiliza **MongoDB** para armazenamento persistente e **Redis** para cache.
 
+##### [Link para o Frontend ->](https://github.com/iancdesponds/To-Do-App-FrontEnd)
+
 ## Funcionalidades
 
 - **CRUD de Tarefas**: Criação, listagem, atualização e exclusão de tarefas.
